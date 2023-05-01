@@ -4,11 +4,13 @@ import threading
 import pystray
 import rivalcfg
 import PySimpleGUI as sg
+import winsound
 
 from os.path import join, dirname, realpath
-from plyer import notification
 from PIL import Image, ImageDraw, ImageFont
 
+# set assets path
+assets_path = join(dirname(realpath(__file__)), 'assets')
 
 def create_icon(width, height, battery_level):
     if type(battery_level) is int:
@@ -37,20 +39,49 @@ def get_valid_battery_level(device: rivalcfg.mouse.Mouse):
         battery_level = get_battery_level(device)
     return battery_level
 
+
+def _notify_user_thread(message, timeout=3000, sound=True):
+    header = [sg.Text('Battery Indicator', font=('Arial', 24), text_color='black', background_color='lightgrey', justification='center')]
+    text = [sg.Text(message, font=('Arial', 18), text_color='black', background_color='lightgrey')]
+    window = sg.Window('Battery Indicator', [[header, text]], background_color='lightgrey',
+                       no_titlebar=True, keep_on_top=True, finalize=True)
+    
+    # play sound
+    if sound:
+        winsound.PlaySound(realpath(join(assets_path,'72127__kizilsungur__sweetalertsound3.wav')), winsound.SND_FILENAME | winsound.SND_ASYNC)
+
+    # show window and disappear after 3 seconds
+    w, _ = window.get_screen_size()
+    wx, hx = window.size
+    window.move(w-int(1.25*wx), int(0.5*hx))
+    window(timeout=timeout)
+    window.close()
+    
+    # prevent pysimplegui from crashing
+    sg.Window.hidden_master_root.destroy()
+    sg.Window.hidden_master_root = None
+    del window
+
+
 def notify_user(message):
-    notification.notify(**{'title': 'Battery Indicator',
-                             'message': message,
-                             'app_icon': join(dirname(realpath(__file__)),
-                                          'assets/mouse_icon_selman_design.ico'),
-                             'toast': False})
+    t = threading.Thread(target=_notify_user_thread, args=[message])
+    t.start()
+
 
 def main():
     device = rivalcfg.get_first_mouse()
     if device is None:
         sg.popup('No SteelSeries mouse detected. Please connect one and try again.')
         sys.exit(1)
+    
+    warn_once = False
+    run_event = threading.Event()
+    
+    def stop_running():
+        icon.stop()
+        run_event.set()
         
-    menu = pystray.Menu(pystray.MenuItem('Exit', lambda: icon.stop()))
+    menu = pystray.Menu(pystray.MenuItem('Exit', lambda: stop_running()))
     icon = pystray.Icon('Battery Indicator',
                         icon=create_icon(32, 32, '?'),
                         menu=menu)
@@ -64,8 +95,7 @@ def main():
     
     notify_user('Mouse battery indicator started.')
     
-    warn_once = False
-    while icon._running:
+    while not run_event.is_set():
         battery_level = get_valid_battery_level(device)
         print(f'Battery level: {battery_level}')
         
@@ -75,13 +105,13 @@ def main():
         
         # warn once on low battery
         if not warn_once and battery_level < 15:
-            message = f'Mouse battery low!!({get_battery_level(device)}%)'
+            message = f'Mouse battery low!!({battery_level}%)'
             notify_user(message)
             warn_once = True
         elif warn_once and battery_level > 15:
             warn_once = False
             
-        time.sleep(60.0)
+        run_event.wait(60) # check every minute
 
 if __name__ == '__main__':
     main()
